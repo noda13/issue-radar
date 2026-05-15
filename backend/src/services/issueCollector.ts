@@ -1,8 +1,7 @@
 import Parser from 'rss-parser';
 import { createHash } from 'crypto';
 import prisma from '../lib/prisma.js';
-
-const RSSHUB = process.env.RSSHUB_URL ?? 'https://rsshub.app';
+import { config } from '../lib/config.js';
 
 export interface RawIssue {
   sourceId: string;
@@ -19,6 +18,13 @@ interface RssSource {
   source: string;
   sourceType: string;
 }
+
+const feedParser = new Parser({
+  timeout: 15000,
+  headers: {
+    'User-Agent': 'IssueRadar/1.0 (RSS Reader)',
+  },
+});
 
 const RSS_SOURCES: RssSource[] = [
   // 国内ニュース
@@ -42,8 +48,8 @@ const RSS_SOURCES: RssSource[] = [
   // 政府・公的機関
   { url: 'https://www.cao.go.jp/rss.xml', source: 'cao', sourceType: 'gov' },
   // Twitter via RSSHub
-  { url: `${RSSHUB}/twitter/user/nhk_news`, source: 'x_nhk_news', sourceType: 'twitter' },
-  { url: `${RSSHUB}/twitter/user/jijicom`, source: 'x_jijicom', sourceType: 'twitter' },
+  { url: `${config.rsshubUrl}/twitter/user/nhk_news`, source: 'x_nhk_news', sourceType: 'twitter' },
+  { url: `${config.rsshubUrl}/twitter/user/jijicom`, source: 'x_jijicom', sourceType: 'twitter' },
 ];
 
 function buildSourceId(url: string, title: string): string {
@@ -63,14 +69,7 @@ interface FeedItem {
 }
 
 async function fetchFeed(rssSource: RssSource): Promise<RawIssue[]> {
-  const parser = new Parser({
-    timeout: 15000,
-    headers: {
-      'User-Agent': 'IssueRadar/1.0 (RSS Reader)',
-    },
-  });
-
-  const feed = await parser.parseURL(rssSource.url);
+  const feed = await feedParser.parseURL(rssSource.url);
   const items: RawIssue[] = [];
 
   for (const item of feed.items as FeedItem[]) {
@@ -107,8 +106,8 @@ export async function collectIssues(): Promise<{ collected: number; skipped: num
 
   const results = await Promise.allSettled(RSS_SOURCES.map((src) => fetchFeed(src)));
 
-  let collected = 0;
-  let skipped = 0;
+  // Collect all new items across all sources
+  const allItems: RawIssue[] = [];
 
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
@@ -119,52 +118,52 @@ export async function collectIssues(): Promise<{ collected: number; skipped: num
       continue;
     }
 
-    const items = result.value;
-    console.log(`[IssueCollector] ${src.source}: fetched ${items.length} items`);
-
-    for (const item of items) {
-      try {
-        const existing = await prisma.issue.findUnique({
-          where: { sourceId: item.sourceId },
-          select: { id: true },
-        });
-
-        if (existing) {
-          skipped++;
-          continue;
-        }
-
-        await prisma.issue.create({
-          data: {
-            sourceId: item.sourceId,
-            source: item.source,
-            sourceType: item.sourceType,
-            originalTitle: item.originalTitle,
-            originalUrl: item.originalUrl,
-            publishedAt: item.publishedAt,
-            rawContent: item.rawContent,
-            summaryJa: '',
-            category: '',
-            severityScore: 0,
-            urgencyScore: 0,
-            appifiabilityScore: 0,
-            affectedDomain: '[]',
-            proposedAppIdea: '',
-            mvpFeatures: '[]',
-            targetUsers: '',
-            difficulty: '',
-          },
-        });
-        collected++;
-      } catch (error) {
-        console.error(
-          `[IssueCollector] Error upserting ${item.sourceId}: ${String(error)}`,
-        );
-        skipped++;
-      }
+    console.log(`[IssueCollector] ${src.source}: fetched ${result.value.length} items`);
+    for (const item of result.value) {
+      allItems.push(item);
     }
   }
 
+  if (allItems.length === 0) {
+    return { collected: 0, skipped: 0 };
+  }
+
+  // Batch-check which sourceIds already exist
+  const allSourceIds = allItems.map((item) => item.sourceId);
+  const existing = await prisma.issue.findMany({
+    where: { sourceId: { in: allSourceIds } },
+    select: { sourceId: true },
+  });
+  const existingSet = new Set(existing.map((e) => e.sourceId));
+
+  const newItems = allItems.filter((item) => !existingSet.has(item.sourceId));
+  const skipped = allItems.length - newItems.length;
+
+  if (newItems.length > 0) {
+    await prisma.issue.createMany({
+      data: newItems.map((item) => ({
+        sourceId: item.sourceId,
+        source: item.source,
+        sourceType: item.sourceType,
+        originalTitle: item.originalTitle,
+        originalUrl: item.originalUrl,
+        publishedAt: item.publishedAt,
+        rawContent: item.rawContent,
+        summaryJa: '',
+        category: '',
+        severityScore: 0,
+        urgencyScore: 0,
+        appifiabilityScore: 0,
+        affectedDomain: '[]',
+        proposedAppIdea: '',
+        mvpFeatures: '[]',
+        targetUsers: '',
+        difficulty: '',
+      })),
+    });
+  }
+
+  const collected = newItems.length;
   console.log(`[IssueCollector] Done. collected=${collected}, skipped=${skipped}`);
   return { collected, skipped };
 }
