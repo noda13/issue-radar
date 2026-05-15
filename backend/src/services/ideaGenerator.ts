@@ -1,5 +1,5 @@
 import prisma from '../lib/prisma.js';
-import { callLLM, parseJsonLLM, getSessionTokenUsage, resetSessionTokenUsage } from './llm.js';
+import { callLLM, parseJsonLLM, type TokenUsage } from './llm.js';
 import { DIFFICULTY_LEVELS, type DifficultyLevel } from '../schemas/api.js';
 
 const MAX_ISSUES = 20;
@@ -40,7 +40,7 @@ async function generateIdeaForIssue(issue: {
   urgencyScore: number;
   appifiabilityScore: number;
   affectedDomain: string;
-}): Promise<boolean> {
+}): Promise<{ success: boolean; tokensUsed: number }> {
   const affectedDomains = (() => {
     try {
       return (JSON.parse(issue.affectedDomain) as string[]).join('、');
@@ -60,13 +60,15 @@ async function generateIdeaForIssue(issue: {
 
 この課題を解決または支援するアプリのアイデアを提案してください。`;
 
-  let rawText: string;
+  let result: { text: string; usage: TokenUsage };
   try {
-    rawText = await callLLM(SYSTEM_PROMPT, userMessage);
+    result = await callLLM(SYSTEM_PROMPT, userMessage);
   } catch (error) {
     console.error(`[IdeaGenerator] LLM call failed for issue ${issue.id}: ${String(error)}`);
-    return false;
+    return { success: false, tokensUsed: 0 };
   }
+
+  const rawText = result.text;
 
   let parsed: IdeaResult;
   try {
@@ -79,7 +81,7 @@ async function generateIdeaForIssue(issue: {
     console.error(
       `[IdeaGenerator] JSON parse failed for issue ${issue.id}: ${String(error)}\nRaw: ${rawText.slice(0, 300)}`,
     );
-    return false;
+    return { success: false, tokensUsed: result.usage.inputTokens + result.usage.outputTokens };
   }
 
   const difficulty = isValidDifficulty(parsed.difficulty) ? parsed.difficulty : 'medium';
@@ -98,16 +100,15 @@ async function generateIdeaForIssue(issue: {
         ideaGeneratedAt: new Date(),
       },
     });
-    return true;
+    return { success: true, tokensUsed: result.usage.inputTokens + result.usage.outputTokens };
   } catch (error) {
     console.error(`[IdeaGenerator] DB update failed for issue ${issue.id}: ${String(error)}`);
-    return false;
+    return { success: false, tokensUsed: result.usage.inputTokens + result.usage.outputTokens };
   }
 }
 
 export async function generateIdeas(): Promise<{ generated: number; tokensUsed: number }> {
   console.log('[IdeaGenerator] Starting idea generation...');
-  resetSessionTokenUsage();
 
   const candidates = await prisma.issue.findMany({
     where: {
@@ -136,16 +137,16 @@ export async function generateIdeas(): Promise<{ generated: number; tokensUsed: 
 
   console.log(`[IdeaGenerator] Found ${candidates.length} candidates.`);
   let generated = 0;
+  let totalTokens = 0;
 
   for (const issue of candidates) {
     console.log(`[IdeaGenerator] Generating idea for issue ${issue.id}: ${issue.originalTitle.slice(0, 60)}`);
-    const success = await generateIdeaForIssue(issue);
+    const { success, tokensUsed: ideaTokens } = await generateIdeaForIssue(issue);
     if (success) generated++;
+    totalTokens += ideaTokens;
   }
 
-  const usage = getSessionTokenUsage();
-  const tokensUsed = usage.inputTokens + usage.outputTokens;
-  console.log(`[IdeaGenerator] Done. generated=${generated}, tokens=${tokensUsed}`);
+  console.log(`[IdeaGenerator] Done. generated=${generated}, tokens=${totalTokens}`);
 
-  return { generated, tokensUsed };
+  return { generated, tokensUsed: totalTokens };
 }

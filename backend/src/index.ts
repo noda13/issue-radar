@@ -5,6 +5,7 @@ import adminRouter from './routes/admin.js';
 import issuesRouter from './routes/issues.js';
 import ideasRouter from './routes/ideas.js';
 import { startScheduler } from './jobs/scheduler.js';
+import { adminAuth } from './middleware/adminAuth.js';
 
 const app = express();
 
@@ -30,7 +31,7 @@ app.get('/health', (_req, res) => {
 });
 
 // Routes
-app.use('/api/admin', adminRouter);
+app.use('/api/admin', adminAuth, adminRouter);
 app.use('/api/issues', issuesRouter);
 app.use('/api/ideas', ideasRouter);
 
