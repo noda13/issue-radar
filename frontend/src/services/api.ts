@@ -44,7 +44,9 @@ export async function fetchIssues(params?: IssuesParams): Promise<Issue[]> {
 
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error(`Failed to fetch issues: ${res.status}`);
-  return res.json() as Promise<Issue[]>;
+  const data = (await res.json()) as { issues?: Issue[] };
+  if (!Array.isArray(data.issues)) throw new Error(`Unexpected response shape from /api/issues`);
+  return data.issues;
 }
 
 export async function fetchIssue(id: number): Promise<Issue> {
@@ -57,7 +59,9 @@ export async function fetchIssue(id: number): Promise<Issue> {
 
   const res = await fetch(`/api/issues/${id}`);
   if (!res.ok) throw new Error(`Failed to fetch issue ${id}: ${res.status}`);
-  return res.json() as Promise<Issue>;
+  const data = (await res.json()) as { issue?: Issue };
+  if (!data.issue) throw new Error(`Unexpected response shape from /api/issues/${id}`);
+  return data.issue;
 }
 
 export async function fetchIdeas(params?: IdeasParams): Promise<Issue[]> {
@@ -80,7 +84,9 @@ export async function fetchIdeas(params?: IdeasParams): Promise<Issue[]> {
 
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error(`Failed to fetch ideas: ${res.status}`);
-  return res.json() as Promise<Issue[]>;
+  const data = (await res.json()) as { issues?: Issue[] };
+  if (!Array.isArray(data.issues)) throw new Error(`Unexpected response shape from /api/ideas`);
+  return data.issues;
 }
 
 export async function fetchIdeaById(id: number): Promise<Issue> {
@@ -93,7 +99,9 @@ export async function fetchIdeaById(id: number): Promise<Issue> {
 
   const res = await fetch(`/api/ideas/${id}`);
   if (!res.ok) throw new Error(`Failed to fetch idea ${id}: ${res.status}`);
-  return res.json() as Promise<Issue>;
+  const data = (await res.json()) as { issue?: Issue };
+  if (!data.issue) throw new Error(`Unexpected response shape from /api/ideas/${id}`);
+  return data.issue;
 }
 
 export async function fetchCategorySummary(): Promise<CategorySummary[]> {

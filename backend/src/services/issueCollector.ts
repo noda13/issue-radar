@@ -139,31 +139,36 @@ export async function collectIssues(): Promise<{ collected: number; skipped: num
   const newItems = allItems.filter((item) => !existingSet.has(item.sourceId));
   const skipped = allItems.length - newItems.length;
 
+  let collected = 0;
   if (newItems.length > 0) {
-    await prisma.issue.createMany({
-      data: newItems.map((item) => ({
-        sourceId: item.sourceId,
-        source: item.source,
-        sourceType: item.sourceType,
-        originalTitle: item.originalTitle,
-        originalUrl: item.originalUrl,
-        publishedAt: item.publishedAt,
-        rawContent: item.rawContent,
-        summaryJa: '',
-        category: '',
-        severityScore: 0,
-        urgencyScore: 0,
-        appifiabilityScore: 0,
-        affectedDomain: '[]',
-        proposedAppIdea: '',
-        mvpFeatures: '[]',
-        targetUsers: '',
-        difficulty: '',
-      })),
-    });
+    try {
+      const result = await prisma.issue.createMany({
+        data: newItems.map((item) => ({
+          sourceId: item.sourceId,
+          source: item.source,
+          sourceType: item.sourceType,
+          originalTitle: item.originalTitle,
+          originalUrl: item.originalUrl,
+          publishedAt: item.publishedAt,
+          rawContent: item.rawContent,
+          summaryJa: '',
+          category: '',
+          severityScore: 0,
+          urgencyScore: 0,
+          appifiabilityScore: 0,
+          affectedDomain: '[]',
+          proposedAppIdea: '',
+          mvpFeatures: '[]',
+          targetUsers: '',
+          difficulty: '',
+        })),
+      });
+      collected = result.count;
+    } catch (error) {
+      console.error('[IssueCollector] createMany failed:', String(error));
+      throw error;
+    }
   }
-
-  const collected = newItems.length;
   console.log(`[IssueCollector] Done. collected=${collected}, skipped=${skipped}`);
   return { collected, skipped };
 }
