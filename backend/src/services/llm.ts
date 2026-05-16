@@ -37,6 +37,7 @@ async function callGroq(systemPrompt: string, userMessage: string): Promise<LLMR
   ];
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    signal: AbortSignal.timeout(30000),
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -114,6 +115,7 @@ async function callOpenAI(systemPrompt: string, userMessage: string): Promise<LL
   ];
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    signal: AbortSignal.timeout(30000),
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
