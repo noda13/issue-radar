@@ -10,22 +10,6 @@ export interface LLMResponse {
   usage: TokenUsage;
 }
 
-// Session-level token tracking
-let sessionTokenUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
-
-export function getSessionTokenUsage(): TokenUsage {
-  return { ...sessionTokenUsage };
-}
-
-export function resetSessionTokenUsage(): void {
-  sessionTokenUsage = { inputTokens: 0, outputTokens: 0 };
-}
-
-function addUsage(usage: TokenUsage): void {
-  sessionTokenUsage.inputTokens += usage.inputTokens;
-  sessionTokenUsage.outputTokens += usage.outputTokens;
-}
-
 // --- Groq Provider ---
 
 interface GroqMessage {
@@ -53,6 +37,7 @@ async function callGroq(systemPrompt: string, userMessage: string): Promise<LLMR
   ];
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    signal: AbortSignal.timeout(30000),
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -78,7 +63,6 @@ async function callGroq(systemPrompt: string, userMessage: string): Promise<LLMR
     outputTokens: data.usage?.completion_tokens ?? 0,
   };
 
-  addUsage(usage);
   return { text, usage };
 }
 
@@ -101,7 +85,6 @@ async function callGemini(systemPrompt: string, userMessage: string): Promise<LL
     outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
   };
 
-  addUsage(usage);
   return { text, usage };
 }
 
@@ -132,6 +115,7 @@ async function callOpenAI(systemPrompt: string, userMessage: string): Promise<LL
   ];
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    signal: AbortSignal.timeout(30000),
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -157,7 +141,6 @@ async function callOpenAI(systemPrompt: string, userMessage: string): Promise<LL
     outputTokens: data.usage?.completion_tokens ?? 0,
   };
 
-  addUsage(usage);
   return { text, usage };
 }
 
@@ -182,18 +165,25 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
 export type LLMProvider = 'groq' | 'gemini' | 'openai';
 
 function detectProvider(): LLMProvider {
-  // Priority: GROQ_API_KEY → GEMINI_API_KEY → OPENAI_API_KEY
+  const explicit = config.llmProvider as LLMProvider | '';
+  if (explicit === 'groq' || explicit === 'gemini' || explicit === 'openai') {
+    const keyMap: Record<LLMProvider, string> = {
+      groq: config.groqApiKey,
+      gemini: config.geminiApiKey,
+      openai: config.openaiApiKey,
+    };
+    if (keyMap[explicit]) return explicit;
+    console.warn(`[LLM] LLM_PROVIDER=${explicit} set but API key is missing, falling back to auto-detect`);
+  }
   if (config.groqApiKey) return 'groq';
   if (config.geminiApiKey) return 'gemini';
   if (config.openaiApiKey) return 'openai';
-  throw new Error(
-    'No LLM provider configured. Set GROQ_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY.',
-  );
+  throw new Error('No LLM provider configured. Set GROQ_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY.');
 }
 
 // --- Public API ---
 
-export async function callLLM(systemPrompt: string, userMessage: string): Promise<string> {
+export async function callLLM(systemPrompt: string, userMessage: string): Promise<{ text: string; usage: TokenUsage }> {
   const provider = detectProvider();
   console.log(`  [LLM] Using provider: ${provider}`);
 
@@ -208,7 +198,7 @@ export async function callLLM(systemPrompt: string, userMessage: string): Promis
     }
   });
 
-  return result.text;
+  return result;
 }
 
 export function parseJsonLLM(text: string): unknown {
