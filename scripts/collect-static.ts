@@ -38,6 +38,7 @@ interface CategorySummary {
 // --- Data dir helpers ---
 
 const DATA_DIR = join(import.meta.dirname, '..', 'frontend', 'public', 'data');
+const IDEA_GEN_DELAY_MS = 3000;
 
 function ensureDataDir(): void {
   if (!existsSync(DATA_DIR)) {
@@ -188,6 +189,14 @@ async function callGemini(system: string, user: string, key: string): Promise<st
   return r.response.text();
 }
 
+function clampScore(value: unknown): number {
+  if (typeof value !== 'number') {
+    console.warn(`[clampScore] unexpected value: ${JSON.stringify(value)}, defaulting to 0`);
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 function parseJson(text: string): unknown {
   try {
     let s = text.trim();
@@ -330,9 +339,9 @@ async function classifyIssues(issues: Issue[]): Promise<void> {
         if (chunkIssue) {
           chunkIssue.summaryJa = r.summaryJa;
           chunkIssue.category = r.category;
-          chunkIssue.severityScore = r.severityScore;
-          chunkIssue.urgencyScore = r.urgencyScore;
-          chunkIssue.appifiabilityScore = r.appifiabilityScore;
+          chunkIssue.severityScore = clampScore(r.severityScore);
+          chunkIssue.urgencyScore = clampScore(r.urgencyScore);
+          chunkIssue.appifiabilityScore = clampScore(r.appifiabilityScore);
           chunkIssue.affectedDomain = r.affectedDomain;
           chunkIssue.classifiedAt = new Date().toISOString();
         }
@@ -397,6 +406,10 @@ async function generateIdeas(issues: Issue[]): Promise<void> {
       console.log(`  Idea generated (${i + 1}/${targets.length}): ${issue.originalTitle.slice(0, 50)}`);
     } catch (err) {
       console.error(`  Idea generation failed for "${issue.originalTitle.slice(0, 40)}":`, err instanceof Error ? err.message : err);
+    }
+
+    if (i < targets.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, IDEA_GEN_DELAY_MS));
     }
   }
 }

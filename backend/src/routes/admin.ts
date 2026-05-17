@@ -24,7 +24,8 @@ router.post('/collect', async (_req: Request, res: Response): Promise<void> => {
       console.error('[Admin] Collection error:', String(err));
     });
   } catch (error) {
-    res.status(500).json({ error: String(error) });
+    console.error('[Admin]', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -37,7 +38,8 @@ router.get('/logs', async (_req: Request, res: Response): Promise<void> => {
     });
     res.json({ logs });
   } catch (error) {
-    res.status(500).json({ error: String(error) });
+    console.error('[Admin]', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

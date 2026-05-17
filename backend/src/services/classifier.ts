@@ -1,5 +1,5 @@
 import prisma from '../lib/prisma.js';
-import { callLLM, parseJsonLLM, getSessionTokenUsage, resetSessionTokenUsage } from './llm.js';
+import { callLLM, parseJsonLLM, type TokenUsage } from './llm.js';
 import { ISSUE_CATEGORIES, type IssueCategoryType } from '../schemas/api.js';
 
 const BATCH_SIZE = 10;
@@ -49,7 +49,7 @@ function clampScore(value: unknown): number {
 
 async function classifyBatch(
   issues: Array<{ id: number; originalTitle: string; rawContent: string }>,
-): Promise<number> {
+): Promise<{ updated: number; tokensUsed: number }> {
   const userMessage = issues
     .map(
       (issue, idx) =>
@@ -57,13 +57,15 @@ async function classifyBatch(
     )
     .join('\n\n---\n\n');
 
-  let rawText: string;
+  let result: { text: string; usage: TokenUsage };
   try {
-    rawText = await callLLM(SYSTEM_PROMPT, userMessage);
+    result = await callLLM(SYSTEM_PROMPT, userMessage);
   } catch (error) {
     console.error(`[Classifier] LLM call failed for batch: ${String(error)}`);
-    return 0;
+    return { updated: 0, tokensUsed: 0 };
   }
+
+  const rawText = result.text;
 
   let parsed: LLMClassificationResponse;
   try {
@@ -74,29 +76,29 @@ async function classifyBatch(
     parsed = data;
   } catch (error) {
     console.error(`[Classifier] JSON parse failed: ${String(error)}\nRaw: ${rawText.slice(0, 500)}`);
-    return 0;
+    return { updated: 0, tokensUsed: 0 };
   }
 
   let updated = 0;
 
-  for (const result of parsed.results) {
-    const issue = issues[result.index];
+  for (const r of parsed.results) {
+    const issue = issues[r.index];
     if (!issue) continue;
 
-    const category = isValidCategory(result.category) ? result.category : 'governance';
-    const affectedDomain = Array.isArray(result.affectedDomain)
-      ? result.affectedDomain.filter((d): d is string => typeof d === 'string')
+    const category = isValidCategory(r.category) ? r.category : 'governance';
+    const affectedDomain = Array.isArray(r.affectedDomain)
+      ? r.affectedDomain.filter((d): d is string => typeof d === 'string')
       : [];
 
     try {
       await prisma.issue.update({
         where: { id: issue.id },
         data: {
-          summaryJa: result.summaryJa ?? '',
+          summaryJa: r.summaryJa ?? '',
           category,
-          severityScore: clampScore(result.severityScore),
-          urgencyScore: clampScore(result.urgencyScore),
-          appifiabilityScore: clampScore(result.appifiabilityScore),
+          severityScore: clampScore(r.severityScore),
+          urgencyScore: clampScore(r.urgencyScore),
+          appifiabilityScore: clampScore(r.appifiabilityScore),
           affectedDomain: JSON.stringify(affectedDomain),
           classifiedAt: new Date(),
         },
@@ -107,12 +109,11 @@ async function classifyBatch(
     }
   }
 
-  return updated;
+  return { updated, tokensUsed: result.usage.inputTokens + result.usage.outputTokens };
 }
 
 export async function classifyIssues(): Promise<{ classified: number; tokensUsed: number }> {
   console.log('[Classifier] Starting classification...');
-  resetSessionTokenUsage();
 
   const unclassified = await prisma.issue.findMany({
     where: { classifiedAt: null },
@@ -128,21 +129,21 @@ export async function classifyIssues(): Promise<{ classified: number; tokensUsed
 
   console.log(`[Classifier] Found ${unclassified.length} unclassified issues.`);
   let totalClassified = 0;
+  let totalTokens = 0;
 
   for (let i = 0; i < unclassified.length; i += BATCH_SIZE) {
     const batch = unclassified.slice(i, i + BATCH_SIZE);
     console.log(
       `[Classifier] Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(unclassified.length / BATCH_SIZE)} (${batch.length} issues)`,
     );
-    const count = await classifyBatch(batch);
-    totalClassified += count;
+    const { updated, tokensUsed: batchTokens } = await classifyBatch(batch);
+    totalClassified += updated;
+    totalTokens += batchTokens;
   }
 
-  const usage = getSessionTokenUsage();
-  const tokensUsed = usage.inputTokens + usage.outputTokens;
   console.log(
-    `[Classifier] Done. classified=${totalClassified}, tokens=${tokensUsed}`,
+    `[Classifier] Done. classified=${totalClassified}, tokens=${totalTokens}`,
   );
 
-  return { classified: totalClassified, tokensUsed };
+  return { classified: totalClassified, tokensUsed: totalTokens };
 }

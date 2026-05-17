@@ -2,6 +2,8 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import prisma from '../lib/prisma.js';
 import { ISSUE_CATEGORIES, type IssueCategoryType } from '../schemas/api.js';
 
+const VALID_SOURCE_TYPES = ['news_jp', 'news_global', 'gov', 'twitter'] as const;
+
 const router: RouterType = Router();
 
 // GET /api/issues
@@ -35,7 +37,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       where.category = category as IssueCategoryType;
     }
 
-    if (typeof sourceType === 'string' && sourceType.length > 0) {
+    if (typeof sourceType === 'string' && (VALID_SOURCE_TYPES as readonly string[]).includes(sourceType)) {
       where.sourceType = sourceType;
     }
 
@@ -60,7 +62,8 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       offset,
     });
   } catch (error) {
-    res.status(500).json({ error: String(error) });
+    console.error('[Issues]', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -82,7 +85,8 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 
     res.json({ issue });
   } catch (error) {
-    res.status(500).json({ error: String(error) });
+    console.error('[Issues]', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

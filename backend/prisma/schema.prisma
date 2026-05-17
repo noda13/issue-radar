@@ -21,10 +21,10 @@ model Issue {
   severityScore      Int       @default(0)
   urgencyScore       Int       @default(0)
   appifiabilityScore Int       @default(0)
-  affectedDomain     String    @default("[]")
+  affectedDomain     String    @default("[]") // JSON array; stored as string (SQLite)
   classifiedAt       DateTime?
   proposedAppIdea    String    @default("")
-  mvpFeatures        String    @default("[]")
+  mvpFeatures        String    @default("[]") // JSON array; stored as string (SQLite)
   targetUsers        String    @default("")
   difficulty         String    @default("")
   ideaGeneratedAt    DateTime?
