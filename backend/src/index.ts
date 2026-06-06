@@ -6,16 +6,26 @@ import issuesRouter from './routes/issues.js';
 import ideasRouter from './routes/ideas.js';
 import { startScheduler } from './jobs/scheduler.js';
 import { adminAuth } from './middleware/adminAuth.js';
+import prisma from './lib/prisma.js';
 
 const app = express();
 
 // Middleware
 app.use(express.json());
 
-// CORS: allow all origins
+// CORS: allow only configured origins
+const CORS_ORIGINS = (config.corsOrigins ?? 'http://localhost:5173,http://localhost:4173')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use((_req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  const origin = _req.headers.origin;
+  if (origin && CORS_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   next();
 });
@@ -54,7 +64,7 @@ app.use(
 );
 
 // Start server
-app.listen(config.port, () => {
+const server = app.listen(config.port, () => {
   console.log(`[Server] issue-radar backend listening on port ${config.port}`);
   console.log(`[Server] Health check: http://localhost:${config.port}/health`);
 });
@@ -62,13 +72,35 @@ app.listen(config.port, () => {
 // Start scheduler
 startScheduler();
 
-// Graceful uncaught error handling
+// Graceful shutdown
+async function shutdown(signal: string): Promise<void> {
+  console.log(`[Process] Received ${signal}, shutting down gracefully...`);
+  // Wait for in-flight HTTP requests to complete before disconnecting Prisma
+  await new Promise<void>((resolve) => server.close(() => {
+    console.log('[Process] HTTP server closed.');
+    resolve();
+  }));
+  try {
+    await prisma.$disconnect();
+  } catch {
+    // ignore disconnect errors during shutdown
+  }
+  // Exit non-zero for all unclean signals so process supervisors treat them as crashes
+  const isUnclean = signal === 'uncaughtException' || signal === 'unhandledRejection';
+  process.exit(isUnclean ? 1 : 0);
+}
+
+process.on('SIGINT', () => { void shutdown('SIGINT'); });
+process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
+
 process.on('uncaughtException', (err) => {
   console.error('[Process] Uncaught exception:', err.message);
   console.error(err.stack);
-  // Do not exit — keep the server running for recoverable errors
+  void shutdown('uncaughtException');
 });
 
 process.on('unhandledRejection', (reason) => {
   console.error('[Process] Unhandled rejection:', String(reason));
+  // Treat unhandled rejections as fatal — exit so a supervisor can restart cleanly
+  void shutdown('unhandledRejection');
 });

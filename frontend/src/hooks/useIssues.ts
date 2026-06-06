@@ -31,7 +31,7 @@ export function useIssue(id: number) {
     queryKey: ['issues', id],
     queryFn: () => fetchIssue(id),
     staleTime: STALE_TIME,
-    refetchInterval: REFETCH_INTERVAL,
+    refetchIntervalInBackground: false,
     enabled: id > 0,
   });
 }
@@ -56,7 +56,7 @@ export function useIdeaById(id: number) {
     queryKey: ['ideas', id],
     queryFn: () => fetchIdeaById(id),
     staleTime: STALE_TIME,
-    refetchInterval: REFETCH_INTERVAL,
+    refetchIntervalInBackground: false,
     enabled: id > 0,
   });
 }

@@ -139,11 +139,18 @@ export async function generateIdeas(): Promise<{ generated: number; tokensUsed: 
   let generated = 0;
   let totalTokens = 0;
 
-  for (const issue of candidates) {
-    console.log(`[IdeaGenerator] Generating idea for issue ${issue.id}: ${issue.originalTitle.slice(0, 60)}`);
+  const INTER_REQUEST_DELAY_MS = 3000;
+
+  for (let i = 0; i < candidates.length; i++) {
+    const issue = candidates[i];
+    console.log(`[IdeaGenerator] Generating idea for issue ${issue.id} (${i + 1}/${candidates.length}): ${issue.originalTitle.slice(0, 60)}`);
     const { success, tokensUsed: ideaTokens } = await generateIdeaForIssue(issue);
     if (success) generated++;
     totalTokens += ideaTokens;
+    // Pacing: avoid rate limiting on LLM APIs (except after the last issue)
+    if (i < candidates.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, INTER_REQUEST_DELAY_MS));
+    }
   }
 
   console.log(`[IdeaGenerator] Done. generated=${generated}, tokens=${totalTokens}`);

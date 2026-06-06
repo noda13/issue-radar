@@ -67,7 +67,9 @@ export async function runCollection(): Promise<CollectionResult> {
     console.log('[Collector] Collection complete.', result);
     return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    // Truncate to avoid persisting potentially sensitive upstream error bodies
+    const message = rawMessage.slice(0, 500).replace(/[\x00-\x1f]/g, ' ');
     console.error(`[Collector] Collection failed: ${message}`);
 
     if (logId !== null) {

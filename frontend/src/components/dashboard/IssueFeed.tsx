@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useIssues } from '../../hooks/useIssues';
 import { ISSUE_CATEGORIES, CATEGORY_LABELS, type IssueCategoryType } from '../../lib/categories';
 import IssueCard from './IssueCard';
@@ -29,6 +29,17 @@ export default function IssueFeed({ category: propCategory, sourceType: propSour
   );
   const [categoryFilter, setCategoryFilter] = useState<string>(propCategory ?? 'all');
   const [displayCount, setDisplayCount] = useState(PAGE_SIZE);
+
+  // Sync external category/sourceType props into local state when they change
+  useEffect(() => {
+    setCategoryFilter(propCategory ?? 'all');
+    setDisplayCount(PAGE_SIZE);
+  }, [propCategory]);
+
+  useEffect(() => {
+    setSourceTypeFilter((propSourceType as SourceTypeFilter) ?? 'all');
+    setDisplayCount(PAGE_SIZE);
+  }, [propSourceType]);
 
   const effectiveSourceType = sourceTypeFilter === 'all' ? undefined : sourceTypeFilter;
   const effectiveCategory = categoryFilter === 'all' ? undefined : categoryFilter;

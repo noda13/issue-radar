@@ -33,3 +33,23 @@ export function getScoreLevel(score: number): string {
   if (score < 80) return 'high';
   return 'critical';
 }
+
+import { z } from 'zod';
+
+export const paginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+export const issueQuerySchema = paginationSchema.extend({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  category: z.string().optional(),
+  sourceType: z.string().optional(),
+  minSeverity: z.coerce.number().int().min(0).max(100).optional(),
+});
+
+export const ideaQuerySchema = paginationSchema.extend({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  category: z.string().optional(),
+  difficulty: z.string().optional(),
+});
