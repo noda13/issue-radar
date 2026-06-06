@@ -1,7 +1,42 @@
 import { createHash } from 'crypto';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import Parser from 'rss-parser';
+
+/**
+ * Validates that a URL is safe to use as an external API endpoint.
+ * Blocks private/loopback addresses and non-https URLs when credentials will be sent.
+ * Allows http://localhost for local development convenience.
+ */
+function validateExternalUrl(url: string, label: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`${label} is not a valid URL: "${url}"`);
+  }
+
+  const hostname = parsed.hostname;
+  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+
+  // For non-localhost URLs, require https
+  if (!isLocalhost && parsed.protocol !== 'https:') {
+    throw new Error(`${label} must use https for non-local URLs (got: "${url}")`);
+  }
+
+  // Block RFC-1918 and link-local addresses (SSRF protection)
+  const privatePatterns = [
+    /^10\./,
+    /^172\.(1[6-9]|2\d|3[01])\./,
+    /^192\.168\./,
+    /^169\.254\./,
+    /^fc00:/i,
+    /^fe80:/i,
+  ];
+  if (!isLocalhost && privatePatterns.some(p => p.test(hostname))) {
+    throw new Error(`${label} points to a private/internal address: "${hostname}"`);
+  }
+}
 
 // --- Types ---
 
@@ -58,8 +93,16 @@ function readJson<T>(filename: string, defaultValue: T): T {
 
 function writeJson(filename: string, data: unknown): void {
   ensureDataDir();
-  writeFileSync(join(DATA_DIR, filename), JSON.stringify(data, null, 2), 'utf-8');
-  console.log(`  Wrote ${filename}`);
+  const filePath = join(DATA_DIR, filename);
+  const tmpPath = filePath + '.tmp';
+  try {
+    writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+    renameSync(tmpPath, filePath); // atomic on same filesystem
+    console.log(`  Wrote ${filename}`);
+  } catch (err) {
+    try { unlinkSync(tmpPath); } catch { /* ignore cleanup errors */ }
+    throw err;
+  }
 }
 
 // --- RSS Sources ---
@@ -161,6 +204,7 @@ async function callLLM(system: string, user: string): Promise<string> {
 }
 
 async function callOpenAICompatible(system: string, user: string, config: LLMConfig): Promise<string> {
+  validateExternalUrl(config.baseUrl, 'LLM_BASE_URL');
   const res = await fetch(`${config.baseUrl}/chat/completions`, {
     method: 'POST',
     signal: AbortSignal.timeout(30000),
@@ -173,9 +217,16 @@ async function callOpenAICompatible(system: string, user: string, config: LLMCon
       response_format: { type: 'json_object' },
     }),
   });
-  if (!res.ok) throw new Error(`${config.provider} ${res.status}: ${await res.text()}`);
-  const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-  return data.choices[0].message.content;
+  if (!res.ok) {
+    const errorBody = (await res.text()).slice(0, 200).replace(/[\x00-\x1f]/g, ' ');
+    throw new Error(`${config.provider} API error ${res.status}: ${errorBody}`);
+  }
+  const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error(`${config.provider} returned empty or malformed response (no choices[0].message.content)`);
+  }
+  return content;
 }
 
 async function callGemini(system: string, user: string, key: string): Promise<string> {
@@ -324,27 +375,43 @@ async function classifyIssues(issues: Issue[]): Promise<void> {
 
     try {
       const raw = await callLLM(CLASSIFY_SYSTEM, userMessage);
-      const parsed = parseJson(raw) as { results: Array<{
-        index: number;
-        summaryJa: string;
-        category: string;
-        severityScore: number;
-        urgencyScore: number;
-        appifiabilityScore: number;
-        affectedDomain: string[];
-      }> };
+      const parsed = parseJson(raw) as { results?: unknown[] };
+
+      // Validate shape
+      if (!parsed || !Array.isArray(parsed.results)) {
+        console.error(`  Batch ${Math.floor(i / BATCH_SIZE) + 1}: LLM returned invalid shape (missing results array)`);
+        continue;
+      }
+
+      // Build a lookup keyed by the index we actually sent (global index = i + localIdx)
+      const indexToIssue = new Map<number, Issue>();
+      chunk.forEach((issue, localIdx) => indexToIssue.set(i + localIdx, issue));
+
+      const VALID_CATEGORIES = [
+        'employment_economy', 'healthcare_welfare', 'education', 'childcare_family',
+        'aging_care', 'governance', 'environment_disaster', 'community_regional',
+      ];
 
       for (const r of parsed.results) {
-        const chunkIssue = chunk[r.index - i];
-        if (chunkIssue) {
-          chunkIssue.summaryJa = r.summaryJa;
-          chunkIssue.category = r.category;
-          chunkIssue.severityScore = clampScore(r.severityScore);
-          chunkIssue.urgencyScore = clampScore(r.urgencyScore);
-          chunkIssue.appifiabilityScore = clampScore(r.appifiabilityScore);
-          chunkIssue.affectedDomain = r.affectedDomain;
-          chunkIssue.classifiedAt = new Date().toISOString();
+        if (typeof r !== 'object' || r === null) continue;
+        const rec = r as Record<string, unknown>;
+        const idx = typeof rec.index === 'number' ? rec.index : -1;
+        const chunkIssue = indexToIssue.get(idx);
+        if (!chunkIssue) {
+          if (idx !== -1) console.warn(`  Skipping unknown index ${idx} in batch ${Math.floor(i / BATCH_SIZE) + 1}`);
+          continue;
         }
+        chunkIssue.summaryJa = typeof rec.summaryJa === 'string' ? rec.summaryJa : '';
+        chunkIssue.category = VALID_CATEGORIES.includes(rec.category as string)
+          ? (rec.category as string)
+          : 'governance';
+        chunkIssue.severityScore = clampScore(rec.severityScore);
+        chunkIssue.urgencyScore = clampScore(rec.urgencyScore);
+        chunkIssue.appifiabilityScore = clampScore(rec.appifiabilityScore);
+        chunkIssue.affectedDomain = Array.isArray(rec.affectedDomain)
+          ? (rec.affectedDomain as unknown[]).filter((d): d is string => typeof d === 'string')
+          : [];
+        chunkIssue.classifiedAt = new Date().toISOString();
       }
 
       console.log(`  Classified batch ${Math.floor(i / BATCH_SIZE) + 1}: ${chunk.length} items`);
@@ -390,17 +457,22 @@ async function generateIdeas(issues: Issue[]): Promise<void> {
 
     try {
       const raw = await callLLM(IDEA_SYSTEM, userMessage);
-      const parsed = parseJson(raw) as {
-        proposedAppIdea: string;
-        mvpFeatures: string[];
-        targetUsers: string;
-        difficulty: string;
-      };
+      const parsed = parseJson(raw) as Record<string, unknown>;
 
+      if (!parsed || typeof parsed.proposedAppIdea !== 'string') {
+        console.error(`  Invalid idea response for "${issue.originalTitle.slice(0, 40)}": missing proposedAppIdea`);
+        continue;
+      }
+
+      const VALID_DIFFICULTIES = ['low', 'medium', 'high'];
       issue.proposedAppIdea = parsed.proposedAppIdea;
-      issue.mvpFeatures = parsed.mvpFeatures;
-      issue.targetUsers = parsed.targetUsers;
-      issue.difficulty = parsed.difficulty;
+      issue.mvpFeatures = Array.isArray(parsed.mvpFeatures)
+        ? (parsed.mvpFeatures as unknown[]).filter((f): f is string => typeof f === 'string')
+        : [];
+      issue.targetUsers = typeof parsed.targetUsers === 'string' ? parsed.targetUsers : '';
+      issue.difficulty = VALID_DIFFICULTIES.includes(parsed.difficulty as string)
+        ? (parsed.difficulty as string)
+        : 'medium';
       issue.ideaGeneratedAt = new Date().toISOString();
 
       console.log(`  Idea generated (${i + 1}/${targets.length}): ${issue.originalTitle.slice(0, 50)}`);
@@ -442,6 +514,11 @@ function buildCategorySummary(issues: Issue[]): CategorySummary[] {
 
 async function main() {
   console.log('=== Issue Radar Static Collection ===\n');
+
+  // Validate RSSHUB_URL to prevent SSRF
+  if (process.env.RSSHUB_URL) {
+    validateExternalUrl(process.env.RSSHUB_URL, 'RSSHUB_URL');
+  }
 
   const prev = readJson<Issue[]>('issues.json', []);
 

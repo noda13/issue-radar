@@ -3,6 +3,24 @@ import { createHash } from 'crypto';
 import prisma from '../lib/prisma.js';
 import { config } from '../lib/config.js';
 
+/**
+ * Checks that a URL is safe to use as an external RSS/API endpoint.
+ * Allows https (always) and http for localhost only.
+ * Blocks RFC-1918 / link-local addresses to prevent SSRF.
+ */
+function isSafeExternalUrl(urlStr: string): boolean {
+  try {
+    const parsed = new URL(urlStr);
+    const h = parsed.hostname;
+    const isLocal = h === 'localhost' || h === '127.0.0.1' || h === '::1';
+    if (!isLocal && parsed.protocol !== 'https:') return false;
+    if (!isLocal && /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|fc00:|fe80:)/i.test(h)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface RawIssue {
   sourceId: string;
   source: string;
@@ -47,9 +65,14 @@ const RSS_SOURCES: RssSource[] = [
   },
   // 政府・公的機関
   { url: 'https://www.cao.go.jp/rss.xml', source: 'cao', sourceType: 'gov' },
-  // Twitter via RSSHub
-  { url: `${config.rsshubUrl}/twitter/user/nhk_news`, source: 'x_nhk_news', sourceType: 'twitter' },
-  { url: `${config.rsshubUrl}/twitter/user/jijicom`, source: 'x_jijicom', sourceType: 'twitter' },
+  // Twitter via RSSHub (skipped if rsshubUrl is not a safe external URL)
+  ...(isSafeExternalUrl(config.rsshubUrl) ? [
+    { url: `${config.rsshubUrl}/twitter/user/nhk_news`, source: 'x_nhk_news', sourceType: 'twitter' },
+    { url: `${config.rsshubUrl}/twitter/user/jijicom`, source: 'x_jijicom', sourceType: 'twitter' },
+  ] : (() => {
+    console.warn(`[IssueCollector] RSSHUB_URL "${config.rsshubUrl}" is unsafe (must be https or localhost); RSSHub sources skipped.`);
+    return [];
+  })()),
 ];
 
 function buildSourceId(url: string, title: string): string {
@@ -77,11 +100,13 @@ async function fetchFeed(rssSource: RssSource): Promise<RawIssue[]> {
     const link = item.link ?? item.guid ?? '';
     if (!title || !link) continue;
 
-    const publishedAt = item.isoDate
+    const rawDate = item.isoDate
       ? new Date(item.isoDate)
       : item.pubDate
         ? new Date(item.pubDate)
         : new Date();
+    // Fall back to now if the date is invalid (e.g., malformed RSS date string)
+    const publishedAt = Number.isNaN(rawDate.getTime()) ? new Date() : rawDate;
 
     const rawContent = item.contentSnippet ?? item.content ?? item.summary ?? '';
 

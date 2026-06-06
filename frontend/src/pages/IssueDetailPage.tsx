@@ -6,6 +6,7 @@ import ErrorBox from '../components/common/ErrorBox';
 import { useIssue } from '../hooks/useIssues';
 import { CATEGORY_LABELS, CATEGORY_COLORS, type IssueCategoryType } from '../lib/categories';
 import { formatDate, getDifficultyLabel, getDifficultyColor } from '../lib/formatters';
+import { safeHref } from '../lib/safeHref';
 
 const SOURCE_TYPE_LABELS = {
   twitter: 'Twitter',
@@ -16,8 +17,9 @@ const SOURCE_TYPE_LABELS = {
 
 export default function IssueDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const issueId = Number(id ?? '0');
-  const { data: issue, isLoading, error } = useIssue(issueId);
+  const parsedId = Number(id);
+  const isValidId = Number.isInteger(parsedId) && parsedId > 0;
+  const { data: issue, isLoading, error } = useIssue(isValidId ? parsedId : 0);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -33,8 +35,9 @@ export default function IssueDetailPage() {
           </Link>
         </div>
 
-        {isLoading && <Loading />}
-        {error && <ErrorBox message="課題データの取得に失敗しました" />}
+        {!isValidId && <ErrorBox message="無効なIDです" />}
+        {isValidId && isLoading && <Loading />}
+        {isValidId && error && <ErrorBox message="課題データの取得に失敗しました" />}
 
         {issue && (
           <div className="space-y-6">
@@ -68,9 +71,9 @@ export default function IssueDetailPage() {
 
               <div className="mb-4 flex items-center gap-4 text-sm text-gray-500">
                 <span>公開: {formatDate(issue.publishedAt)}</span>
-                {issue.originalUrl && (
+                {safeHref(issue.originalUrl) && (
                   <a
-                    href={issue.originalUrl}
+                    href={safeHref(issue.originalUrl)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-blue-600 hover:underline"
