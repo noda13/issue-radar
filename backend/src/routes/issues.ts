@@ -1,6 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import prisma from '../lib/prisma.js';
-import { ISSUE_CATEGORIES, type IssueCategoryType } from '../schemas/api.js';
+import { ISSUE_CATEGORIES, type IssueCategoryType, issueQuerySchema } from '../schemas/api.js';
 
 const VALID_SOURCE_TYPES = ['news_jp', 'news_global', 'gov', 'twitter'] as const;
 
@@ -9,21 +9,13 @@ const router: RouterType = Router();
 // GET /api/issues
 router.get('/', async (req: Request, res: Response): Promise<void> => {
   try {
-    const {
-      category,
-      limit: limitStr,
-      offset: offsetStr,
-      minSeverity: minSeverityStr,
-      sourceType,
-    } = req.query;
+    const parsed = issueQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid query parameters', details: parsed.error.format() });
+      return;
+    }
 
-    const limit = Math.min(
-      parseInt(typeof limitStr === 'string' ? limitStr : '50', 10) || 50,
-      100,
-    );
-    const offset = parseInt(typeof offsetStr === 'string' ? offsetStr : '0', 10) || 0;
-    const minSeverity =
-      typeof minSeverityStr === 'string' ? parseInt(minSeverityStr, 10) : undefined;
+    const { limit, offset, category, sourceType, minSeverity } = parsed.data;
 
     type WhereClause = {
       category?: string;
@@ -41,7 +33,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       where.sourceType = sourceType;
     }
 
-    if (minSeverity !== undefined && !isNaN(minSeverity)) {
+    if (minSeverity !== undefined) {
       where.severityScore = { gte: minSeverity };
     }
 
@@ -55,12 +47,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       prisma.issue.count({ where }),
     ]);
 
-    res.json({
-      issues,
-      total,
-      limit,
-      offset,
-    });
+    res.json({ issues, total, limit, offset });
   } catch (error) {
     console.error('[Issues]', error);
     res.status(500).json({ error: 'Internal server error' });

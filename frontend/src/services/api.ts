@@ -2,6 +2,8 @@ import type { Issue, CategorySummary, MetaInfo } from '../lib/types';
 
 const isStatic = import.meta.env.VITE_STATIC_DATA === 'true';
 const BASE_URL = import.meta.env.BASE_URL || '/';
+// Normalize: strip trailing slash to avoid double-slash in string-concatenated paths
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 
 async function fetchStatic<T>(filename: string): Promise<T> {
   const res = await fetch(`${BASE_URL}data/${filename}`);
@@ -36,13 +38,13 @@ export async function fetchIssues(params?: IssuesParams): Promise<Issue[]> {
     return issues.slice(offset, offset + limit);
   }
 
-  const url = new URL('/api/issues', window.location.origin);
+  const url = new URL(`${API_BASE}/api/issues`, window.location.origin);
   if (params?.category) url.searchParams.set('category', params.category);
   if (params?.limit != null) url.searchParams.set('limit', String(params.limit));
   if (params?.offset != null) url.searchParams.set('offset', String(params.offset));
   if (params?.sourceType) url.searchParams.set('sourceType', params.sourceType);
 
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`Failed to fetch issues: ${res.status}`);
   const data = (await res.json()) as { issues?: Issue[] };
   if (!Array.isArray(data.issues)) throw new Error(`Unexpected response shape from /api/issues`);
@@ -57,7 +59,7 @@ export async function fetchIssue(id: number): Promise<Issue> {
     return issue;
   }
 
-  const res = await fetch(`/api/issues/${id}`);
+  const res = await fetch(`${API_BASE}/api/issues/${id}`, { signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`Failed to fetch issue ${id}: ${res.status}`);
   const data = (await res.json()) as { issue?: Issue };
   if (!data.issue) throw new Error(`Unexpected response shape from /api/issues/${id}`);
@@ -77,13 +79,14 @@ export async function fetchIdeas(params?: IdeasParams): Promise<Issue[]> {
     return ideas.slice(0, limit);
   }
 
-  const url = new URL('/api/ideas', window.location.origin);
+  const url = new URL(`${API_BASE}/api/ideas`, window.location.origin);
   if (params?.category) url.searchParams.set('category', params.category);
   if (params?.difficulty) url.searchParams.set('difficulty', params.difficulty);
   if (params?.limit != null) url.searchParams.set('limit', String(params.limit));
 
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`Failed to fetch ideas: ${res.status}`);
+  // The /api/ideas endpoint returns data under the `issues` key (shared Prisma model shape)
   const data = (await res.json()) as { issues?: Issue[] };
   if (!Array.isArray(data.issues)) throw new Error(`Unexpected response shape from /api/ideas`);
   return data.issues;
@@ -97,7 +100,7 @@ export async function fetchIdeaById(id: number): Promise<Issue> {
     return idea;
   }
 
-  const res = await fetch(`/api/ideas/${id}`);
+  const res = await fetch(`${API_BASE}/api/ideas/${id}`, { signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`Failed to fetch idea ${id}: ${res.status}`);
   const data = (await res.json()) as { issue?: Issue };
   if (!data.issue) throw new Error(`Unexpected response shape from /api/ideas/${id}`);
@@ -109,7 +112,7 @@ export async function fetchCategorySummary(): Promise<CategorySummary[]> {
     return fetchStatic<CategorySummary[]>('category-summary.json');
   }
 
-  const res = await fetch('/api/category-summary');
+  const res = await fetch(`${API_BASE}/api/category-summary`, { signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`Failed to fetch category summary: ${res.status}`);
   return res.json() as Promise<CategorySummary[]>;
 }
@@ -119,7 +122,7 @@ export async function fetchMeta(): Promise<MetaInfo> {
     return fetchStatic<MetaInfo>('meta.json');
   }
 
-  const res = await fetch('/api/meta');
+  const res = await fetch(`${API_BASE}/api/meta`, { signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`Failed to fetch meta: ${res.status}`);
   return res.json() as Promise<MetaInfo>;
 }

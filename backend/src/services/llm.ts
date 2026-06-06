@@ -48,12 +48,13 @@ async function callGroq(systemPrompt: string, userMessage: string): Promise<LLMR
       messages,
       temperature: 0.3,
       max_tokens: 4096,
-    }),
+      response_format: { type: 'json_object' },
+    } as Record<string, unknown>),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Groq API error ${response.status}: ${errorText}`);
+    throw new Error(`Groq API error ${response.status}: ${errorText.slice(0, 200).replace(/[\x00-\x1f]/g, ' ')}`);
   }
 
   const data = (await response.json()) as GroqResponse;
@@ -75,6 +76,7 @@ async function callGemini(systemPrompt: string, userMessage: string): Promise<LL
   const model = genAI.getGenerativeModel({
     model: modelName,
     systemInstruction: systemPrompt,
+    generationConfig: { responseMimeType: 'application/json' },
   });
 
   const result = await model.generateContent(userMessage);
@@ -126,12 +128,13 @@ async function callOpenAI(systemPrompt: string, userMessage: string): Promise<LL
       messages,
       temperature: 0.3,
       max_tokens: 4096,
-    }),
+      response_format: { type: 'json_object' },
+    } as Record<string, unknown>),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
+    throw new Error(`OpenAI API error ${response.status}: ${errorText.slice(0, 200).replace(/[\x00-\x1f]/g, ' ')}`);
   }
 
   const data = (await response.json()) as OpenAIResponse;
@@ -146,18 +149,34 @@ async function callOpenAI(systemPrompt: string, userMessage: string): Promise<LL
 
 // --- Retry Logic ---
 
+function isRetryableError(error: unknown): boolean {
+  if (!(error instanceof Error)) return true;
+  // Check for HTTP status in error message (e.g., "Groq API error 429: ...")
+  const match = error.message.match(/API error (\d+)/);
+  if (match) {
+    const status = parseInt(match[1], 10);
+    // Retry on server errors (5xx) and rate limiting (429); do NOT retry on 4xx
+    return status >= 500 || status === 429;
+  }
+  // Network/timeout errors are retryable
+  return true;
+}
+
 async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  let lastError: unknown;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       return await fn();
     } catch (error) {
-      if (attempt === maxRetries - 1) throw error;
+      lastError = error;
+      if (!isRetryableError(error) || attempt === maxRetries - 1) throw error;
       const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
       console.log(`  [LLM] Retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
-  throw new Error('Unreachable');
+  // lastError is always set because maxRetries >= 1
+  throw lastError;
 }
 
 // --- Provider Detection ---
@@ -202,13 +221,23 @@ export async function callLLM(systemPrompt: string, userMessage: string): Promis
 }
 
 export function parseJsonLLM(text: string): unknown {
-  // Strip markdown code fences (```json ... ``` or ``` ... ```)
-  const stripped = text
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/, '')
+  // Strip markdown code fences
+  let s = text
+    .replace(/^```(?:json)?\s*/im, '')
+    .replace(/\s*```\s*$/m, '')
     .trim();
 
-  return JSON.parse(stripped);
+  // If not starting with { or [, best-effort: extract the first JSON structure.
+  // Note: the regex is greedy and captures from the first to the last brace/bracket,
+  // which works for single-block responses but may over-capture if there are multiple
+  // JSON blocks. In practice this path is rarely hit because providers are configured
+  // to return JSON directly (responseMimeType / response_format).
+  if (!s.startsWith('{') && !s.startsWith('[')) {
+    const m = s.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+    if (m) s = m[1];
+  }
+
+  return JSON.parse(s);
 }
 
 export function getActiveProvider(): string {
