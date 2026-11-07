@@ -1,6 +1,10 @@
 name: CI
 
 on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -8,7 +12,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded PR runs are cancelled; a master push run must always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -28,6 +33,11 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # --ignore-scripts skips the @prisma/client postinstall, so the client must be generated
+      # before type checking. Needs no DB connection.
+      - name: Generate Prisma client
+        run: pnpm --filter ./backend run prisma:generate
 
       # backend has no lint script/config and no build script (runs via tsx, not compiled),
       # so only type checking is run here.
