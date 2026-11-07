@@ -3,9 +3,17 @@ name: CI
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  backend:
+  check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -19,33 +27,16 @@ jobs:
           cache: 'pnpm'
 
       - name: Install dependencies
-        run: pnpm install --ignore-scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       # backend has no lint script/config and no build script (runs via tsx, not compiled),
       # so only type checking is run here.
-      - name: Type check
+      - name: Type check (backend)
         run: pnpm --filter ./backend exec tsc --noEmit
 
-  frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --ignore-scripts
-
       # no lint script/config exists in the repo yet, so lint is skipped here.
-      - name: Type check
+      - name: Type check (frontend)
         run: pnpm --filter ./frontend run type-check
 
-      - name: Build
+      - name: Build (frontend)
         run: pnpm --filter ./frontend run build
